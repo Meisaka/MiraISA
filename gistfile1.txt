@@ -149,27 +149,27 @@ THREE-OPERAND FORMAT (64) - instr x,y,z or instr x,y,$n
 01111111 00rrcccc 0000zzzz yyyyxxxx   lhsux  x := SIGN_EXTEND_16_TO_32(*(y+z)); y := y+z
 
 TWO-OPERAND FORMAT (32) - instr x,y or instr x,$n
-00100000 00rrcccc yyyyyyyy yyyyxxxx   mov    x := y
-00100001 00rrcccc yyyyyyyy yyyyxxxx   swp    x := y; y := x  (in parallel)
-00100010 00rrcccc yyyyyyyy yyyyxxxx   not    x := !y
-00100011 00rrcccc yyyyyyyy yyyyxxxx   (reserved)
-00100100 00rrcccc yyyyyyyy yyyyxxxx   sxtb   x := SIGN_EXTEND_8_TO_32(y)
-00100101 00rrcccc yyyyyyyy yyyyxxxx   sxtw   x := SIGN_EXTEND_16_TO_32(y)
-00100110 00rrcccc yyyyyyyy yyyyxxxx   zxtb   x := ZERO_EXTEND_8_TO_32(y)
-00100111 00rrcccc yyyyyyyy yyyyxxxx   zxtw   x := ZERO_EXTEND_16_TO_32(y)
-00101ooo 00rrcccc yyyyyyyy yyyyxxxx   (reserved)
-0011oooo 00rrcccc yyyyyyyy yyyyxxxx   (reserved)
+00100000 00rrcccc 00000000 yyyyxxxx   mov    x := y
+00100001 00rrcccc 00000000 yyyyxxxx   swp    x := y; y := x  (in parallel)
+00100010 00rrcccc 00000000 yyyyxxxx   not    x := !y
+00100011 00rrcccc 00000000 yyyyxxxx   (reserved)
+00100100 00rrcccc 00000000 yyyyxxxx   sxtb   x := SIGN_EXTEND_8_TO_32(y)
+00100101 00rrcccc 00000000 yyyyxxxx   sxtw   x := SIGN_EXTEND_16_TO_32(y)
+00100110 00rrcccc 00000000 yyyyxxxx   zxtb   x := ZERO_EXTEND_8_TO_32(y)
+00100111 00rrcccc 00000000 yyyyxxxx   zxtw   x := ZERO_EXTEND_16_TO_32(y)
+00101ooo 00rrcccc 00000000 yyyyxxxx   (reserved)
+0011oooo 00rrcccc 00000000 yyyyxxxx   (reserved)
 
 ONE-OPERAND FORMAT (16) - instr x or instr $n
-00010000 00rrcccc xxxxxxxx xxxxxxxx   (reserved)
-00010001 00rrcccc xxxxxxxx xxxxxxxx   pop    *(SP++)] := x
-00010010 00rrcccc xxxxxxxx xxxxxxxx   push   x := *(--SP)
-00010011 00rrcccc xxxxxxxx xxxxxxxx   b      PC := x
-00010100 00rrcccc xxxxxxxx xxxxxxxx   call   *(SP++) := PC; PC := x
-00010101 00rrcccc xxxxxxxx xxxxxxxx   br     PC += x
-00010110 00rrcccc xxxxxxxx xxxxxxxx   callr  *(SP++) := PC; PC += x
-00010111 00rrcccc xxxxxxxx xxxxxxxx   int    (software interrupt)
-00011ooo 00rrcccc xxxxxxxx xxxxxxxx   (reserved)
+00010000 00rrcccc 00000000 0000xxxx   (reserved)
+00010001 00rrcccc 00000000 0000xxxx   pop    *(SP++)] := x
+00010010 00rrcccc 00000000 0000xxxx   push   x := *(--SP)
+00010011 00rrcccc nnnnnnnn nnnnnnnn   b      PC := n
+00010100 00rrcccc nnnnnnnn nnnnnnnn   call   *(SP++) := PC; PC := n
+00010101 00rrcccc nnnnnnnn nnnnnnnn   br     PC += n
+00010110 00rrcccc nnnnnnnn nnnnnnnn   callr  *(SP++) := PC; PC += n
+00010111 00rrcccc nnnnnnnn nnnnnnnn   int    (software interrupt)
+00011ooo 00rrcccc 00000000 0000xxxx   (reserved)
 
 ZERO-OPERAND FORMAT (8) - instr
 00001000 00rrcccc 00000000 00000000   ret    PC := *(--SP)
