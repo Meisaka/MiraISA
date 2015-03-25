@@ -36,16 +36,13 @@ x - operands (regsisters, immediates, etc.)
 0ooooooo ssrrcccc xxxxxxxx xxxxxxxx
 
 THREE-OPERAND FORMAT (64)
-01oooooo 00rrcccc 0000zzzz yyyyxxxx (1)
-01oooooo 00rrcccc nnnnnnnn yyyyxxxx (2)
+01oooooo 00rrcccc zzzzzzzz yyyyxxxx (2)
 
 TWO-OPERAND FORMAT (32)
-001ooooo 00rrcccc 00000000 yyyyxxxx (1)
-001ooooo 00rrcccc nnnnnnnn nnnnxxxx (2)
+001ooooo 00rrcccc zzzzzzzz zzzzxxxx (2)
 
 ONE-OPERAND FORMAT (16)
-0001oooo 00rrcccc 00000000 0000xxxx (1)
-0001oooo 00rrcccc nnnnnnnn nnnnnnnn (2)
+0001oooo 00rrcccc zzzzzzzz zzzzzzzz (2)
 
 ZERO-OPERAND FORMAT (8)
 00001ooo 00rrcccc 00000000 00000000 (3)
@@ -79,27 +76,31 @@ instruction is executed unconditionally.
 There are four conditional registers, selected
 with the conditional register selecter rr.
 
-and
-or
-xor
-rotl
-rotr
-shr
-sar
-shl / sal
+The condition register is 8-bits long, each bit
+is numbered. There are twice as many condition codes
+because the upper half is the inverse of the lower half.
 
-
+0000   carry
+0001   overflow
+0010   less than
+0011   greater than
+0100   equal to
+0101   (reserved)
+0110   (reserved)
+0111   (reserved)
+1000   no carry
+1001   no overflow
+1010   greater than or equal to
+1011   less than or equal to
+1100   not equal to
+1101   (reserved)
+1110   (reserved)
+1111   (reserved)
 
 INSTRUCTION LISTING
 -------------------
 
-lbz  load byte and zero-extend
-lbs  load byte and sign-extend
-lhz  load half and zero-extend
-lhs  load half and sign-extend
-lw   load word
-
-sal  alias for shl
+sal  (alias for shl)
 
 THREE-OPERAND FORMAT (64) - instr x,y,z or instr x,y,$n
 01000000 00rrcccc 0000zzzz yyyyxxxx   add    x := y + z
