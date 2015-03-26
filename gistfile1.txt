@@ -1,21 +1,40 @@
-BIS: the Better Instruction Set
+========================================
+=  Mira2204 Instruction Set Archeture  =
+========================================
 
 REGISTERS
 ---------
 
-sixteen 32-bit general-purpose registers, numbered 0-15
-one     16-bit status register
-four    16-bit arithmetic condition registers, numbered 0-3
+sixteen 32-bit general-purpose registers (a0-a15), numbered 0-15
+one     16-bit status register (sr)
+four    16-bit arithmetic condition registers (cc0-cc3), numbered 0-3
+one     32-bit call stack pointer register (isp)
+one     32-bit data stack pointer register (dsp)
+one     32-bit instruction pointer register (pc)
 
-INSTRUCTION FORMAT LEGEND
--------------------------
+   31                        16 15                         0
+  +---------------------------------------------------------+
+  |                            |              |             | d0 - d15
+  |                            |              |             |
+  +---------------------------------------------------------+
 
-n   immediate
-c   condition code
-r   condition register
-x   operand x
-y   operand y
-z   operand z
+                               +----------------------------+
+                               |                            | sr
+                               +----------------------------+
+   31                        16 15                         0
+  +----------------------------+----------------------------+
+  |             cc1            |            cc0             | cc1 : cc0
+  +----------------------------+----------------------------+
+  |             cc3            |            cc2             | cc3 : cc2
+  +----------------------------+----------------------------+
+   31                                                      0
+  +---------------------------------------------------------+
+  |                                                         | pc
+  +---------------------------------------------------------+
+  |                                                         | isp
+  +---------------------------------------------------------+
+  |                                                         | dsp
+  +---------------------------------------------------------+
 
 
 STANDARD INSTRUCTION FORMAT
@@ -23,29 +42,30 @@ STANDARD INSTRUCTION FORMAT
 
 - has support for conditional instruction
 - instructions are four bytes long
-- each instruction starts with 0 to
+- each standard instruction has MSB 0 to
   distinguish them from the compact format.
 
 LONG FORMAT IN GENERAL
 c - conditional code
 o - operator
 r - conditional register 
-s - reserved
+V - reserved (should be set to 0)
 x - operands (regsisters, immediates, etc.)
 
-0ooooooo ssrrcccc xxxxxxxx xxxxxxxx
+<- MSB                       LSB ->
+0ooooooo VVrrcccc xxxxxxxx xxxxxxxx
 
-THREE-OPERAND FORMAT (64)
-01oooooo 00rrcccc zzzzzzzz yyyyxxxx (2)
+Three-Operand Format (64)
+01oooooo 00rrcccc zzzzzzzz yyyyxxxx (Note 2)
 
-TWO-OPERAND FORMAT (32)
-001ooooo 00rrcccc zzzzzzzz zzzzxxxx (2)
+Two-Operand Format (32)
+001ooooo 00rrcccc zzzzzzzz zzzzxxxx (Note 2)
 
-ONE-OPERAND FORMAT (16)
-0001oooo 00rrcccc zzzzzzzz zzzzzzzz (2)
+One-Operand Format (16)
+0001oooo 00rrcccc zzzzzzzz zzzzzzzz (Note 2)
 
-ZERO-OPERAND FORMAT (8)
-00001ooo 00rrcccc 00000000 00000000 (3)
+Zero-Operand Format (8)
+00001ooo 00rrcccc 00000000 00000000 (Note 3)
 
 1 - registers only
 2 - registers or immediate
@@ -60,119 +80,155 @@ COMPACT INSTRUCTION FORMAT
   can't have one just there on its own.
 - each two-byte instruction starts with 1.
 
-(to be expanded later)
+FORMAT IN GENERAL
+c - conditional code
+o - operator
+x - operands (regsisters, immediates, etc.)
 
+  Instruction 2     Instruction 1
+<- MSB                       LSB ->
+1ooooooo xxxxxxxx 1ooooooo xxxxxxxx
+
+TODO
 
 CONDITIONAL INSTRUCTIONS
 ------------------------
 
-If the condition register is nonzero then the
-instruction is executed iff the corresponding
-condition bit is set. 
+If the condition code is zero then the instruction is executed
+unconditionally, the condition register bits "rr" must be zero.
+Otherwise the condition code bits specify a condition that must
+be true to execute the instruction.
 
-If the condition register is zero then the
-instruction is executed unconditionally.
+If false, then cpu aborts instruction decoding, advances the pc
+to the next instruction, and goes back to the fetch stage.
 
 There are four conditional registers, selected
-with the conditional register selecter rr.
+with the conditional register selector bits "rr".
+00   cc0
+01   cc1
+10   cc2
+11   cc3
 
-The condition register is 8-bits long, each bit
-is numbered. There are twice as many condition codes
-because the upper half is the inverse of the lower half.
-
-0000   carry
+There are 4 condition code bits in each standard instruciton,
+they index the possible conditions to check:
+0000   Always true
 0001   overflow
-0010   less than
-0011   greater than
-0100   equal to
-0101   (reserved)
-0110   (reserved)
+0010   carry / unsigned greater than or equal
+0011   unsigned greater than
+0100   zero / equal to
+0101   negative / signed less than
+0110   signed greater than
 0111   (reserved)
-1000   no carry
+1000   Always false
 1001   no overflow
-1010   greater than or equal to
-1011   less than or equal to
+1010   no carry / unsigned less than
+1011   unsigned less than or equal
 1100   not equal to
-1101   (reserved)
-1110   (reserved)
+1101   positive / signed greater than or equal
+1110   signed less than or equal
 1111   (reserved)
 
-INSTRUCTION LISTING
--------------------
+STANDARD INSTRUCTION LISTING AND ENCODING
+-----------------------------------------
 
-sal  (alias for shl)
+INSTRUCTION FORMAT LEGEND
+n   immediate
+c   condition code
+r   condition register
+x   operand x
+y   operand y
+z   operand z
 
 THREE-OPERAND FORMAT (64) - instr x,y,z or instr x,y,$n
 01000000 00rrcccc 0000zzzz yyyyxxxx   add    x := y + z
 01000001 00rrcccc 0000zzzz yyyyxxxx   sub    x := y - z
-01000010 00rrcccc 0000zzzz yyyyxxxx   umul   x := y * z
-01000011 00rrcccc 0000zzzz yyyyxxxx   udiv   x := y / z
-01000100 00rrcccc 0000zzzz yyyyxxxx   smul   x := y * z (signed)
-01000101 00rrcccc 0000zzzz yyyyxxxx   sdiv   x := y / z (signed)
-01000110 00rrcccc 0000zzzz yyyyxxxx   urdiv  x := z / y
-01000111 00rrcccc 0000zzzz yyyyxxxx   srdiv  x := z / y (signed)
+01000010 00rrcccc 0000zzzz yyyyxxxx   umul   cc1:cc0:x := y * z (64 bit)
+01000011 00rrcccc 0000zzzz yyyyxxxx   smul   cc1:cc0:x := y * z (64 bit, signed)
+01000100 00rrcccc 0000zzzz yyyyxxxx   udiv   x := y / z; cc1:cc0 := y % z
+01000101 00rrcccc 0000zzzz yyyyxxxx   sdiv   x := y / z; cc1:cc0 := y % z (signed)
+01000110 00rrcccc 0000zzzz yyyyxxxx   urdiv  x := z / y; cc1:cc0 := y % z
+01000111 00rrcccc 0000zzzz yyyyxxxx   srdiv  x := z / y; cc1:cc0 := y % z (signed)
 
 01001000 00rrcccc 0000zzzz yyyyxxxx   and    x := y & z
 01001001 00rrcccc 0000zzzz yyyyxxxx   or     x := y | z
 01001010 00rrcccc 0000zzzz yyyyxxxx   xor    x := y ^ x
-01001011 00rrcccc nnnnnnnn yyyyxxxx   rotl   x := (y << n) | (y >> (32-n))
-01001100 00rrcccc nnnnnnnn yyyyxxxx   rotr   x := (y >> n) | (y << (32-n))
-01001111 00rrcccc 0000zzzz yyyyxxxx   shl    x := y << n
-01001101 00rrcccc 0000zzzz yyyyxxxx   shr    x := y >> n
-01001110 00rrcccc 0000zzzz yyyyxxxx   sar    x := y >>> n
+01001011 00rrcccc 0000zzzz yyyyxxxx   sar    x := y >>> n
+01001100 00rrcccc nnnnnnnn yyyyxxxx   rotl   x := (y << n) | (y >> (32-n))
+01001101 00rrcccc nnnnnnnn yyyyxxxx   rotr   x := (y >> n) | (y << (32-n))
+01001110 00rrcccc 0000zzzz yyyyxxxx   shl    x := y << n
+                                      sal    (alias shl)
+01001111 00rrcccc 0000zzzz yyyyxxxx   shr    x := y >> n
 
 0101oooo 00rrcccc nnnnnnnn yyyyxxxx   (reserved)
-01100ooo 00rrcccc nnnnnnnn yyyyxxxx   (reserved)
-011010oo 00rrcccc nnnnnnnn yyyyxxxx   (reserved)
+
+01100000 00rrcccc nnnnnnnn yyyyxxxx   stb    *(y+n) := LOWER_8(x)
+01100001 00rrcccc nnnnnnnn yyyyxxxx   stub   *(y+n) := LOWER_8(x); y := y+n
+01100010 00rrcccc 0000zzzz yyyyxxxx   stib   *(y+z) := LOWER_8(x)
+01100011 00rrcccc 0000zzzz yyyyxxxx   stuib  *(y+z) := LOWER_8(x); y := y+z
+01100100 00rrcccc nnnnnnnn yyyyxxxx   sth    *(y+n) := LOWER_16(x)
+01100101 00rrcccc nnnnnnnn yyyyxxxx   stuh   *(y+n) := LOWER_16(x); y := y+n
+01100110 00rrcccc 0000zzzz yyyyxxxx   stih   *(y+z) := LOWER_16(x)
+01100111 00rrcccc 0000zzzz yyyyxxxx   stuih  *(y+z) := LOWER_16(x); y := y+z
+
+01101000 00rrcccc nnnnnnnn yyyyxxxx   stw    *(y+n) := x
+01101001 00rrcccc nnnnnnnn yyyyxxxx   stuw   *(y+n) := x; y := y+n
+01101010 00rrcccc 0000zzzz yyyyxxxx   stiw   *(y+z) := x
+01101011 00rrcccc 0000zzzz yyyyxxxx   stuiw  *(y+z) := x; y := y+z
 
 01101100 00rrcccc nnnnnnnn yyyyxxxx   lw     x := *(y+n)
-01101101 00rrcccc nnnnnnnn yyyyxxxx   lwu    x := *(y+n); y := y+n
-01101110 00rrcccc 0000zzzz yyyyxxxx   lwx    x := *(y+z)
-01101111 00rrcccc 0000zzzz yyyyxxxx   lwux   x := *(y+z); y := y+z
+01101101 00rrcccc nnnnnnnn yyyyxxxx   luw    x := *(y+n); y := y+n
+01101110 00rrcccc 0000zzzz yyyyxxxx   liw    x := *(y+z)
+01101111 00rrcccc 0000zzzz yyyyxxxx   luiw   x := *(y+z); y := y+z
 
-01110000 00rrcccc nnnnnnnn yyyyxxxx   lbz    x := ZERO_EXTEND_8_TO_32(*(y+n))
-01110001 00rrcccc nnnnnnnn yyyyxxxx   lbzu   x := ZERO_EXTEND_8_TO_32(*(y+n)); y := y+n
-01110010 00rrcccc 0000zzzz yyyyxxxx   lbzx   x := ZERO_EXTEND_8_TO_32(*(y+z))
-01110011 00rrcccc 0000zzzz yyyyxxxx   lbzux  x := ZERO_EXTEND_8_TO_32(*(y+z)); y := y+z
-01110100 00rrcccc nnnnnnnn yyyyxxxx   lbs    x := SIGN_EXTEND_8_TO_32(*(y+n))
-01110101 00rrcccc nnnnnnnn yyyyxxxx   lbsu   x := SIGN_EXTEND_8_TO_32(*(y+n)); y := y+n
-01110110 00rrcccc 0000zzzz yyyyxxxx   lbsx   x := SIGN_EXTEND_8_TO_32(*(y+z))
-01110111 00rrcccc 0000zzzz yyyyxxxx   lbsux  x := SIGN_EXTEND_8_TO_32(*(y+z)); y := y+z
+01110000 00rrcccc nnnnnnnn yyyyxxxx   lzb    x := ZERO_EXTEND_8_TO_32(*(y+n))
+01110001 00rrcccc nnnnnnnn yyyyxxxx   lzub   x := ZERO_EXTEND_8_TO_32(*(y+n)); y := y+n
+01110010 00rrcccc 0000zzzz yyyyxxxx   lzib   x := ZERO_EXTEND_8_TO_32(*(y+z))
+01110011 00rrcccc 0000zzzz yyyyxxxx   lzuib  x := ZERO_EXTEND_8_TO_32(*(y+z)); y := y+z
+01110100 00rrcccc nnnnnnnn yyyyxxxx   lsb    x := SIGN_EXTEND_8_TO_32(*(y+n))
+01110101 00rrcccc nnnnnnnn yyyyxxxx   lsub   x := SIGN_EXTEND_8_TO_32(*(y+n)); y := y+n
+01110110 00rrcccc 0000zzzz yyyyxxxx   lsib   x := SIGN_EXTEND_8_TO_32(*(y+z))
+01110111 00rrcccc 0000zzzz yyyyxxxx   lsuib  x := SIGN_EXTEND_8_TO_32(*(y+z)); y := y+z
 
-01111000 00rrcccc nnnnnnnn yyyyxxxx   lhz    x := ZERO_EXTEND_16_TO_32(*(y+n))
-01111001 00rrcccc nnnnnnnn yyyyxxxx   lhzu   x := ZERO_EXTEND_16_TO_32(*(y+n)); y := y+n
-01111010 00rrcccc 0000zzzz yyyyxxxx   lhzx   x := ZERO_EXTEND_16_TO_32(*(y+z))
-01111011 00rrcccc 0000zzzz yyyyxxxx   lhzux  x := ZERO_EXTEND_16_TO_32(*(y+z)); y := y+z
-01111100 00rrcccc nnnnnnnn yyyyxxxx   lhs    x := SIGN_EXTEND_16_TO_32(*(y+n))
-01111101 00rrcccc nnnnnnnn yyyyxxxx   lhsu   x := SIGN_EXTEND_16_TO_32(*(y+n)); y := y+n
-01111110 00rrcccc 0000zzzz yyyyxxxx   lhsx   x := SIGN_EXTEND_16_TO_32(*(y+z))
-01111111 00rrcccc 0000zzzz yyyyxxxx   lhsux  x := SIGN_EXTEND_16_TO_32(*(y+z)); y := y+z
+01111000 00rrcccc nnnnnnnn yyyyxxxx   lzh    x := ZERO_EXTEND_16_TO_32(*(y+n))
+01111001 00rrcccc nnnnnnnn yyyyxxxx   lzuh   x := ZERO_EXTEND_16_TO_32(*(y+n)); y := y+n
+01111010 00rrcccc 0000zzzz yyyyxxxx   lzih   x := ZERO_EXTEND_16_TO_32(*(y+z))
+01111011 00rrcccc 0000zzzz yyyyxxxx   lzuih  x := ZERO_EXTEND_16_TO_32(*(y+z)); y := y+z
+01111100 00rrcccc nnnnnnnn yyyyxxxx   lsh    x := SIGN_EXTEND_16_TO_32(*(y+n))
+01111101 00rrcccc nnnnnnnn yyyyxxxx   lsuh   x := SIGN_EXTEND_16_TO_32(*(y+n)); y := y+n
+01111110 00rrcccc 0000zzzz yyyyxxxx   lsih   x := SIGN_EXTEND_16_TO_32(*(y+z))
+01111111 00rrcccc 0000zzzz yyyyxxxx   lsuih  x := SIGN_EXTEND_16_TO_32(*(y+z)); y := y+z
 
 TWO-OPERAND FORMAT (32) - instr x,y or instr x,$n
 00100000 00rrcccc 00000000 yyyyxxxx   mov    x := y
 00100001 00rrcccc 00000000 yyyyxxxx   swp    x := y; y := x  (in parallel)
 00100010 00rrcccc 00000000 yyyyxxxx   not    x := !y
 00100011 00rrcccc 00000000 yyyyxxxx   (reserved)
-00100100 00rrcccc 00000000 yyyyxxxx   sxtb   x := SIGN_EXTEND_8_TO_32(y)
-00100101 00rrcccc 00000000 yyyyxxxx   sxtw   x := SIGN_EXTEND_16_TO_32(y)
-00100110 00rrcccc 00000000 yyyyxxxx   zxtb   x := ZERO_EXTEND_8_TO_32(y)
-00100111 00rrcccc 00000000 yyyyxxxx   zxtw   x := ZERO_EXTEND_16_TO_32(y)
+00100100 00rrcccc 00000000 yyyyxxxx   sxb    x := SIGN_EXTEND_8_TO_32(y)
+00100101 00rrcccc 00000000 yyyyxxxx   sxw    x := SIGN_EXTEND_16_TO_32(y)
+00100110 00rrcccc 00000000 yyyyxxxx   zxb    x := ZERO_EXTEND_8_TO_32(y)
+00100111 00rrcccc 00000000 yyyyxxxx   zxw    x := ZERO_EXTEND_16_TO_32(y)
+00101000 00rrcccc 00000000 yyyyxxxx   cpr0   cc0 :=  FLAGS_OF( x - y )
+00101001 00rrcccc 00000000 yyyyxxxx   cpr1   cc1 :=  FLAGS_OF( x - y )
+00101010 00rrcccc 00000000 yyyyxxxx   cpr2   cc2 :=  FLAGS_OF( x - y )
+00101011 00rrcccc 00000000 yyyyxxxx   cpr3   cc3 :=  FLAGS_OF( x - y )
 00101ooo 00rrcccc 00000000 yyyyxxxx   (reserved)
 0011oooo 00rrcccc 00000000 yyyyxxxx   (reserved)
 
 ONE-OPERAND FORMAT (16) - instr x or instr $n
-00010000 00rrcccc 00000000 0000xxxx   (reserved)
-00010001 00rrcccc 00000000 0000xxxx   pop    *(SP++)] := x
-00010010 00rrcccc 00000000 0000xxxx   push   x := *(--SP)
-00010011 00rrcccc nnnnnnnn nnnnnnnn   b      PC := n
-00010100 00rrcccc nnnnnnnn nnnnnnnn   call   *(SP++) := PC; PC := n
-00010101 00rrcccc nnnnnnnn nnnnnnnn   br     PC += n
-00010110 00rrcccc nnnnnnnn nnnnnnnn   callr  *(SP++) := PC; PC += n
-00010111 00rrcccc nnnnnnnn nnnnnnnn   int    (software interrupt)
+00010000 00rrcccc 00000000 0000xxxx   pushd  *(dsp++) := x
+00010001 00rrcccc 00000000 0000xxxx   popd   x := *(--dsp)
+00010010 00rrcccc 00000000 0000xxxx   pushi  *(isp++)] := x
+00010011 00rrcccc 00000000 0000xxxx   popi   x := *(--isp)
+00010100 00rrcccc nnnnnnnn nnnnnnnn   ba     pc := n
+00010101 00rrcccc nnnnnnnn nnnnnnnn   call   *(isp++) := pc; *(isp++) := dsp; pc := n
+00010110 00rrcccc nnnnnnnn nnnnnnnn   br     pc += n
+00010111 00rrcccc nnnnnnnn nnnnnnnn   callr  *(isp++) := pc; *(isp++) := dsp; pc += n
+00011000 00rrcccc nnnnnnnn nnnnnnnn   int    (software interrupt n)
+00011001 00rrcccc 00000000 0000xxxx   mccrp  x := cc1:cc0
 00011ooo 00rrcccc 00000000 0000xxxx   (reserved)
 
 ZERO-OPERAND FORMAT (8) - instr
-00001000 00rrcccc 00000000 00000000   ret    PC := *(--SP)
+00001000 00rrcccc 00000000 00000000   ret    dsp := *(--isp); pc := *(--isp)
 00001001 00rrcccc 00000000 00000000   brk    PC := PC
 00001010 00rrcccc 00000000 00000000   sleep  (sleep until interrupt)
 00001011 00rrcccc 00000000 00000000   rfi    (return from interrupt)
