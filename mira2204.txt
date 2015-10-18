@@ -123,7 +123,7 @@ Both sr and all cc* registers have the following layout:
 
  15             8 7             0
  +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
- |0|0|0|0|T|S|P|I|N|V|0|0|0|0|C|Z|
+ |0|0|0|F|T|S|P|I|N|V|0|0|0|0|C|Z|
  +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 
 Z (bit 0)  - Zero (set when last result was zero)
@@ -133,11 +133,15 @@ N (bit 7)  - Negative (set when last result is negative)
 I (bit 8)  - Interrupt, when set: prevents pending interrupts from processing,
              set when an interrupt occurs.
 P (bit 9)  - Protect Enable, when set: certain operations generate traps,
-             also prevents changing bits 8-31 in sr.
+             also prevents changing bits 8-31 in sr. Any changes to this bit
+             will cause the CPU to context switch (see CONTEXT SWITCHING.)
 S (bit 10) - SR Trap, when both this bit and P (bit 9) are set: any writes to
              the sr register that would change bits 8-31 cause a CPU trap.
 T (bit 11) - Trap, when this bit is set and P (bit 9) is clear,
              any traps generated will halt the processor.
+F (bit 12) - Full Halt, when set: the CPU will stop executing instructions,
+             interrupts will still be processed in this state unless masked.
+
 
 CONDITIONAL INSTRUCTIONS
 ------------------------
@@ -176,10 +180,12 @@ they index the possible conditions to check:
 1110   signed less than or equal
 1111   (reserved)
 
+
 STANDARD INSTRUCTION LISTING AND ENCODING
 -----------------------------------------
 
 INSTRUCTION FORMAT LEGEND
+o   opcode bits
 n   immediate
 c   condition code
 r   condition register
@@ -303,14 +309,126 @@ ZERO-OPERAND FORMAT (8) - instr
 00001000 00rrcccc 00000000 00000000   ret    dsp = *(isp); isp += 4;
                                              pc = *(isp); isp += 4
 00001001 00rrcccc 00000000 00000000   fret   dsp = r8; pc = r9
-00001010 00rrcccc 00000000 00000000   sleep  (sleep until interrupt)
+00001010 00rrcccc 00000000 00000000   sleep  sr = sr | 0x1000 (halt until interrupt)
 00001011 00rrcccc 00000000 00000000   rfi    (return from interrupt)
 00001ooo 00rrcccc 00000000 00000000   (reserved)
 00001111 00rrcccc 00000000 00000000   brk    pc = pc
 
 
-INTERRUPTS
-----------
+CONTEXT SWITCHING
+-----------------
 
-(to be expanded later)
+The CPU can be running one of two modes at any time: system mode or protected
+mode (also called user mode.)
+The current mode is indicated by the state of the P bit in sr.
+If P is clear, the CPU is running in system mode.
+If P is set, the CPU is running in protected mode.
+If this bit changed by software (set, since software can not clear it), or
+a context switch is required by CPU hardware, the CPU performs these actions:
+- isp and ssp are exchanged
+- pc and spc are exchanged
+- if the CPU is switching to system mode, the P bit in sr is cleared.
+- if the CPU is switching to protected mode, the P bit in sr is set.
+
+
+INTERRUPTS AND TRAPS
+--------------------
+
+- The CPU indexes traps and interrupts using a 256 entry table starting
+  at address zero. Each entry is 32 bits, and contains the address of
+  a routine to execute for a given trap/interrupt.
+- The software interupt operation (int n), the instuction will use the lower
+  8 bits of n as the index into the interrupt table, and generate an
+  interrupt at that index. The upper 8 bits are ignored by hardware, and
+  may be used by software for further decoding/indexing. If the I bit in sr is
+  set, this will generate a special trap instead (see below.)
+- Hardware interrupts generate an 8 bit index for the interrupt table in a
+  platform specific way. Hardware interrupts are inhibited if the I bit in sr
+  is set, and will be processed when I is cleared.
+
+- When an interrupt is processed, the CPU will context switch to system mode
+  if needed, clear the F bit in sr, push pc then 32-bit sr onto isp, 
+  set the I flag in sr, and finally load pc with the address from the interrupt
+  table using the interrupt index.
+- A Trap is an exceptional condition raised by certain CPU operations.
+  When a trap is raised, the CPU will context switch to system mode if needed,
+  push pc then 32-bit sr onto isp, set the Trap flag (T) in sr, and then load
+  pc with with the address from the interrupt table using the trap index.
+- If the T bit in sr is set, and a trap is raised, the CPU will set the F bit
+  in sr, abort all current operations and halt. If the I bit is also set,
+  then a NMI or Reset is the only way resume the CPU from this state.
+
+- the "rfi" or return from interrupt instruction, will pop 32 sr, followed by
+  pc, from isp. If this results in a change to the P flag in sr, the CPU will
+  then perform the context switch after pc is popped.
+- The CPU has a non-maskable interrupt connection, if asserted, the CPU will
+  process an interrupt with index 1, regardless of the operational state of
+  the CPU, including when either the F or I bits in sr are set.
+
+Indexes of special CPU Trap / Interrupt entries:
+  0  Reset - Loaded at reset.
+  0  NMI   - Non maskable interrupt.
+  1  Break Trap
+         - raised when a brk is executed in protected mode.
+  2  Invalid Opcode Trap
+         - raised when reserved opcodes are executed.
+  3  Protection Trap
+         - raised when a system mode instruction is executed while
+           in protected mode.
+  4  Math Trap
+         - raised by udiv or sdiv when the z operand evaluates to zero.
+  5  Software int Trap
+         - raised when an int instruction is processed while
+           the I bit in sr is currently set.
+  6  SR Write Trap
+         - raised when protected mode attepted to change bits 8-31
+           of sr and the S bit in sr is set.
+  7  pc alignment Trap
+         - raised when any instruction sets bit 0 or 1 of pc.
+  8  alignment Trap
+         - raised when any 32 bit read/write accesses an address
+           with bits 0 or 1 set. or a 16 bit read/write accesses
+           an address with bit 0 set.
+  9  access Trap
+         - raised by external hardware when a memory access fails.
+10-15 - reserved for further CPU Traps
+
+
+CPU RESET STATE
+---------------
+
+On Reset, the CPU will:
+- Clear all registers to zero.
+- Set the I and T bits in sr, inhibiting interrupts and forcing halt on any
+  trap raised.
+- Load pc with the reset vector (address 0)
+- Begin instruction execution.
+
+The reset signal is an inverted level input (active low), the CPU will
+unconditionally halt on low input, and will begin the reset sequence on a
+high going edge. This allows hardware the chance to reset and enter a valid
+state before the CPU begins to access it.
+
+
+SYSTEM MODE INSTRUCTIONS
+------------------------
+
+These instructions may only be executed while in system mode, execution from
+protected mode results in raising a Protection Trap:
+
+brk (raises a Break Trap instead)
+mov (only with x0110100 or x0110101 encodings)
+rfi
+sleep
+
+- The x0110100 and x0110101 encodings of "mov" have operands that are
+  considered reserved instructions, executing this instruction with
+  reserved operands raises a Protection Trap while in protected mode,
+  and an Invalid Opcode Trap while in system mode.
+
+- In protected mode, the condition bits are evaluated before executing
+  the instruction, this means that if the condition evaluates false,
+  the operation will not raise a trap in protected mode and the instruction
+  will be skipped.
+
 
