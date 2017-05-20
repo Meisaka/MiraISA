@@ -7,16 +7,18 @@ REGISTERS
 
 nine  32-bit general-purpose registers (r0-r9)
 one   16-bit status register (sr / r14)
-four  16-bit arithmetic condition registers (cc0-cc3 / r10,r11)
+four  16-bit arithmetic condition "ccr" registers (cc0-cc3 / r10,r11)
 one   32-bit call stack pointer register (isp / r13)
 one   32-bit data stack pointer register (dsp / r12)
 one   32-bit instruction pointer register (pc / r15)
 one   32-bit context call stack pointer register (ssp)
 one   32-bit context instruction pointer register (spc)
+one   32-bit system interupt index register (sii)
 
 
 The layout and encoding number is like so:
 
+                        <Main Registers>
    31                        16 15           9 8           0
   +----------------------------+----------------------------+
   |                            |              |             |
@@ -35,11 +37,15 @@ The layout and encoding number is like so:
   +----------------------------+----------------------------+
   |                                pc                       | pc / r15     (15)
   +---------------------------------------------------------+
-   31                        16 15                         0
+
+                       <System Registers>
+   31                        16 15                       1 0
   +---------------------------------------------------------+
-  |                               ssp                       | ssp
-  +---------------------------------------------------------+
-  |                               spc                       | spc
+  |                               ssp                       | ssp    (13)
+  +-----------------------------------------------------+---+
+  |                               sii                   |0 0| sii    (14)
+  +-----------------------------------------------------+---+
+  |                               spc                       | spc    (15)
   +---------------------------------------------------------+
 
 
@@ -47,9 +53,11 @@ STANDARD INSTRUCTION FORMAT
 ---------------------------
 
 - has support for conditional instruction
-- instructions are four bytes long
-- each standard instruction has MSB 0 to
+- instructions are four bytes long, fetched from current pc address
+- each standard instruction has MSB as zero to
   distinguish them from the compact format.
+- when an instruction is executed, the pc points to the beginning
+  of the next four byte instruction
 
 LONG FORMAT IN GENERAL
 c - conditional code
@@ -81,14 +89,17 @@ Zero-Operand Format (8)
 COMPACT INSTRUCTION FORMAT
 --------------------------
 
-- Instructions are two bytes long.
+- Instructions are two bytes long in a pair, all four bytes are prefetched.
 - Must be a multiple of two in a row, you can't have one just there on its own.
-- Each two-byte instruction starts with 1.
+- Each two-byte instruction must have the MSB set.
+- If the MSB is clear on instruction 1, an invalid opcode trap is raised.
 - Execution is unconditional.
-- Both instructions are executed even if i.e. pc is modified by the first.
+- The second instruction is executed even if pc or the instruction word
+  memory are modified by the first instruction.
+- A trap caused by the first instruction is the only way to abort the second.
 - Each instruction in the pair is executed in sequence.
-- When executed, the pc points to the next 4 byte instruction following the
-  compact instructions.
+- When each are executed, the pc points to the next 4 byte instruction
+  following the compact instructions.
 
 FORMAT IN GENERAL
 o - operation bits
@@ -106,8 +117,8 @@ with modified semantics for the operands.
 1100oooo - 0100oooo instruction with x = w, y = w, z = q, n = q
 1101oooo - 0101oooo instruction with x = w, y = w, z = q, n = q
 
-1110oooo - 0110oooo instruction with x = w, y = q, z = r8, n = 0
-1111oooo - 0111oooo instruction with x = w, y = q, z = r8, n = 0
+1110oooo - 0110oooo instruction with x = dsp, y = w, z = q, n = 0
+1111oooo - 0111oooo instruction with x = w, y = dsp, z = q, n = 0
 
 1010oooo - 0010oooo instruction with x = w, y = q, n = q
 1011oooo - 0011oooo instruction with x = w, y = q, n = q
@@ -119,13 +130,18 @@ with modified semantics for the operands.
 CONDITION AND STATUS REGISTERS
 ------------------------------
 
-Both sr and all cc* registers have the following layout:
+Both sr and all ccr registers have the following layout:
 
  15             8 7             0
  +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
- |0|0|0|F|T|S|P|I|N|V|0|0|0|0|C|Z|
+ |0|0|0|F|T|S|P|I|N|V|0|0|0|0|C|Z| sr
+ +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+ 15             8 7             0
+ +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+ |a|a|a|a|a|a|a|a|N|V|a|a|a|a|C|Z| cc[0-3]
  +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 
+a (ccr bits) - unaffected by any non-direct ccr updates.
 Z (bit 0)  - Zero (set when last result was zero)
 C (bit 1)  - Carry (set when last result carried)
 V (bit 6)  - Overflow (set when last signed result overflowed)
@@ -154,14 +170,17 @@ be true to execute the instruction.
 If false, then cpu aborts instruction decoding, advances the pc
 to the next instruction, and goes back to the fetch stage.
 
-There are four conditional registers, selected
-with the conditional register selector bits "rr".
+There are four conditional registers. Conditional registers are
+used when the condition code bits are non-zero.
+The bits of the selected cc register are tested for the condition.
+
+The conditional register is selected with the bits "rr":
 00   cc0
 01   cc1
 10   cc2
 11   cc3
 
-There are 4 condition code bits in each standard instruction,
+There are 4 condition code control bits in each standard instruction,
 they index the possible conditions to check:
 0000   Always true
 0001   overflow
@@ -171,15 +190,21 @@ they index the possible conditions to check:
 0101   negative / signed less than
 0110   signed greater than
 0111   (reserved)
-1000   Always false / never execute
+1000   Always false / never execute / no op
 1001   no overflow
 1010   no carry / unsigned less than
 1011   unsigned less than or equal
 1100   not equal to
 1101   positive / signed greater than or equal
 1110   signed less than or equal
-1111   (reserved)
+1111   Always true (write to selected cc instead of sr)
 
+When the condition is the special value (1111), the instruction will always
+execute, any instruction that would normally update any of the lower 8 bits
+of sr, will update the lower 8 bits of the selected cc register instead.
+The selected cc register is updated after the instruction finishes execute.
+The selected cc register will remain completely unchanged if the instruction
+does not normally affect the status bits.
 
 STANDARD INSTRUCTION LISTING AND ENCODING
 -----------------------------------------
@@ -194,124 +219,158 @@ y   operand y
 z   operand z
 
 THREE-OPERAND FORMAT (64) - instr x,y,z or instr x,y,$n
-01000000 00rrcccc 0000zzzz yyyyxxxx   add    x = y + z
-01000001 00rrcccc 0000zzzz yyyyxxxx   sub    x = y - z
-01000010 00rrcccc 0000zzzz yyyyxxxx   umul   r10:x = y * z (64 bit)
-01000011 00rrcccc 0000zzzz yyyyxxxx   smul   r10:x = y * z (64 bit, signed)
-01000100 00rrcccc 0000zzzz yyyyxxxx   udiv   x = y / z; r10 = y % z
-01000101 00rrcccc 0000zzzz yyyyxxxx   sdiv   x = y / z; r10 = y % z (signed)
-01000110 00rrcccc 0000zzzz yyyyxxxx   rotl   x = (y << z) | (y >> (32-z))
-01000111 00rrcccc 0000zzzz yyyyxxxx   rotr   x = (y >> z) | (y << (32-z))
+ <3 Register ALU Block>
+01000000 00rrcccc 0000zzzz yyyyxxxx   add    x = y + z                       [ZCVN]
+01000001 00rrcccc 0000zzzz yyyyxxxx   sub    x = y - z                       [ZCVN]
+01000010 00rrcccc 0000zzzz yyyyxxxx   umul   r10:x = y * z (64 bit)          [ZCN]
+01000011 00rrcccc 0000zzzz yyyyxxxx   smul   r10:x = y * z (64 bit, signed)  [ZCN]
+01000100 00rrcccc 0000zzzz yyyyxxxx   udiv   x = y / z; r10 = y % z          [ZCN]
+01000101 00rrcccc 0000zzzz yyyyxxxx   sdiv   x = y / z; r10 = y % z (signed) [ZCN]
+01000110 00rrcccc 0000zzzz yyyyxxxx   (reserved)
+01000111 00rrcccc 0000zzzz yyyyxxxx   (reserved)
+01001000 00rrcccc 0000zzzz yyyyxxxx   and    x = y & z                       [ZN]
+01001001 00rrcccc 0000zzzz yyyyxxxx   or     x = y | z                       [ZN]
+01001010 00rrcccc 0000zzzz yyyyxxxx   xor    x = y ^ z                       [ZN]
+01001011 00rrcccc 0000zzzz yyyyxxxx   shl    x = y << z                      [ZCN]
+                                      sal  (alias shl)
+01001100 00rrcccc 0000zzzz yyyyxxxx   shr    x = y >> z                      [ZC] 0>[N]
+01001101 00rrcccc 0000zzzz yyyyxxxx   sar    x = y >>> z                     [ZCN]
+01001110 00rrcccc 0000zzzz yyyyxxxx   rotl   x = (y << z) | (y >> (32-z))    [ZCN]
+01001111 00rrcccc 0000zzzz yyyyxxxx   rotr   x = (y >> z) | (y << (32-z))    [ZCN]
 
-01001000 00rrcccc 0000zzzz yyyyxxxx   and    x = y & z
-01001001 00rrcccc 0000zzzz yyyyxxxx   or     x = y | z
-01001010 00rrcccc 0000zzzz yyyyxxxx   xor    x = y ^ z
-01001011 00rrcccc 0000zzzz yyyyxxxx   sar    x = y >>> n
-01001100 00rrcccc nnnnnnnn yyyyxxxx   rotl   x = (y << n) | (y >> (32-n))
-01001101 00rrcccc nnnnnnnn yyyyxxxx   rotr   x = (y >> n) | (y << (32-n))
-01001110 00rrcccc 0000zzzz yyyyxxxx   shl    x = y << n
-                                      sal    (alias shl)
-01001111 00rrcccc 0000zzzz yyyyxxxx   shr    x = y >> n
+ <2 Register ALU Block>
+01010000 00rrcccc nnnnnnnn yyyyxxxx   add    x = y + n                       [ZCVN]
+01010001 00rrcccc nnnnnnnn yyyyxxxx   sub    x = y - n                       [ZCVN]
+01010010 00rrcccc nnnnnnnn yyyyxxxx   umul   r10:x = y * n (64 bit)          [ZCN]
+01010011 00rrcccc nnnnnnnn yyyyxxxx   smul   r10:x = y * n (64 bit, signed)  [ZCN]
+01010100 00rrcccc nnnnnnnn yyyyxxxx   udiv   x = y / n; r10 = y % n          [ZCN]
+01010101 00rrcccc nnnnnnnn yyyyxxxx   sdiv   x = y / n; r10 = y % n (signed) [ZCN]
+01010110 00rrcccc nnnnnnnn yyyyxxxx   (reserved)
+01010111 00rrcccc nnnnnnnn yyyyxxxx   (reserved)
+01011000 00rrcccc nnnnnnnn yyyyxxxx   and    x = y & n                       [ZN]
+01011001 00rrcccc nnnnnnnn yyyyxxxx   or     x = y | n                       [ZN]
+01011010 00rrcccc nnnnnnnn yyyyxxxx   xor    x = y ^ n                       [ZN]
+01011011 00rrcccc nnnnnnnn yyyyxxxx   shl    x = y << n                      [ZCN]
+01011100 00rrcccc nnnnnnnn yyyyxxxx   shr    x = y >> n                      [ZC] 0>[N]
+01011101 00rrcccc nnnnnnnn yyyyxxxx   sar    x = y >>> n                     [ZCN]
+01011110 00rrcccc nnnnnnnn yyyyxxxx   rotl   x = (y << n) | (y >> (32-n))    [ZCN]
+01011111 00rrcccc nnnnnnnn yyyyxxxx   rotr   x = (y >> n) | (y << (32-n))    [ZCN]
 
-0101oooo 00rrcccc nnnnnnnn yyyyxxxx   (reserved)
-
+ <Memory Store Block>
 01100000 00rrcccc nnnnnnnn yyyyxxxx   stb    *(x+n) = LOWER_8(y)
-01100001 00rrcccc nnnnnnnn yyyyxxxx   stbu   *(x+n) = LOWER_8(y); x += 1
-01100010 00rrcccc 0000zzzz yyyyxxxx   stbi   *(x+z) = LOWER_8(y)
-01100011 00rrcccc 0000zzzz yyyyxxxx   stbui  *(x+z) = LOWER_8(y); x += 1
+01100001 00rrcccc nnnnnnnn yyyyxxxx   stbi   *(x+n) = LOWER_8(y); x += 1
+01100010 00rrcccc nnnnnnnn yyyyxxxx   stbp   x -= 1; *(x+n) = LOWER_8(y)
+01100011 00rrcccc nnnnnnnn yyyyxxxx   stbd   *(x+n) = LOWER_8(y); x -= 1
 01100100 00rrcccc nnnnnnnn yyyyxxxx   sth    *(x+n) = LOWER_16(y)
-01100101 00rrcccc nnnnnnnn yyyyxxxx   sthu   *(x+n) = LOWER_16(y); x += 2
-01100110 00rrcccc 0000zzzz yyyyxxxx   sthi   *(x+z) = LOWER_16(y)
-01100111 00rrcccc 0000zzzz yyyyxxxx   sthui  *(x+z) = LOWER_16(y); x += 2
-
+01100101 00rrcccc nnnnnnnn yyyyxxxx   sthi   *(x+n) = LOWER_16(y); x += 2
+01100110 00rrcccc nnnnnnnn yyyyxxxx   sthp   x -= 2; *(x+n) = LOWER_16(y)
+01100111 00rrcccc nnnnnnnn yyyyxxxx   sthd   *(x+n) = LOWER_16(y); x -= 2
 01101000 00rrcccc nnnnnnnn yyyyxxxx   stw    *(x+n) = y
-01101001 00rrcccc nnnnnnnn yyyyxxxx   stwu   *(x+n) = y; x += 4
-01101010 00rrcccc 0000zzzz yyyyxxxx   stwi   *(x+z) = y
-01101011 00rrcccc 0000zzzz yyyyxxxx   stwui  *(x+z) = y; x += 4
+01101001 00rrcccc nnnnnnnn yyyyxxxx   stwi   *(x+n) = y; x += 4
+01101010 00rrcccc nnnnnnnn yyyyxxxx   stwp   x -= 4; *(x+n) = y
+                                      push x,y  (alias stwp x,y,$0)
+01101011 00rrcccc nnnnnnnn yyyyxxxx   stwd   *(x+n) = y; x -= 4
+01101100 00rrcccc 0000zzzz yyyyxxxx   stbx   *(x+z) = LOWER_8(y)
+01101101 00rrcccc 0000zzzz yyyyxxxx   sthx   *(x+z) = LOWER_16(y)
+01101110 00rrcccc 0000zzzz yyyyxxxx   stwx   *(x+z) = y
+01101111 00rrcccc 0000zzzz yyyyxxxx   stwxi  *(x+z) = y; z += 4
 
-01101100 00rrcccc nnnnnnnn yyyyxxxx   lw     x = *(y+n)
-01101101 00rrcccc nnnnnnnn yyyyxxxx   lwu    x = *(y+n); y += 4
-01101110 00rrcccc 0000zzzz yyyyxxxx   lwi    x = *(y+z)
-01101111 00rrcccc 0000zzzz yyyyxxxx   lwui   x = *(y+z); y += 4
-
-01110000 00rrcccc nnnnnnnn yyyyxxxx   lzb    x = ZERO_EXTEND_8_TO_32(*(y+n))
-01110001 00rrcccc nnnnnnnn yyyyxxxx   lzbu   x = ZERO_EXTEND_8_TO_32(*(y+n)); y += 1
-01110010 00rrcccc 0000zzzz yyyyxxxx   lzbi   x = ZERO_EXTEND_8_TO_32(*(y+z))
-01110011 00rrcccc 0000zzzz yyyyxxxx   lzbui  x = ZERO_EXTEND_8_TO_32(*(y+z)); y += 1
-01110100 00rrcccc nnnnnnnn yyyyxxxx   lsb    x = SIGN_EXTEND_8_TO_32(*(y+n))
-01110101 00rrcccc nnnnnnnn yyyyxxxx   lsbu   x = SIGN_EXTEND_8_TO_32(*(y+n)); y += 1
-01110110 00rrcccc 0000zzzz yyyyxxxx   lsbi   x = SIGN_EXTEND_8_TO_32(*(y+z))
-01110111 00rrcccc 0000zzzz yyyyxxxx   lsbui  x = SIGN_EXTEND_8_TO_32(*(y+z)); y += 1
-
-01111000 00rrcccc nnnnnnnn yyyyxxxx   lzh    x = ZERO_EXTEND_16_TO_32(*(y+n))
-01111001 00rrcccc nnnnnnnn yyyyxxxx   lzhu   x = ZERO_EXTEND_16_TO_32(*(y+n)); y += 2
-01111010 00rrcccc 0000zzzz yyyyxxxx   lzhi   x = ZERO_EXTEND_16_TO_32(*(y+z))
-01111011 00rrcccc 0000zzzz yyyyxxxx   lzhui  x = ZERO_EXTEND_16_TO_32(*(y+z)); y += 2
-01111100 00rrcccc nnnnnnnn yyyyxxxx   lsh    x = SIGN_EXTEND_16_TO_32(*(y+n))
-01111101 00rrcccc nnnnnnnn yyyyxxxx   lshu   x = SIGN_EXTEND_16_TO_32(*(y+n)); y += 2
-01111110 00rrcccc 0000zzzz yyyyxxxx   lshi   x = SIGN_EXTEND_16_TO_32(*(y+z))
-01111111 00rrcccc 0000zzzz yyyyxxxx   lshui  x = SIGN_EXTEND_16_TO_32(*(y+z)); y += 2
+ <Memory Load Block>
+01110000 00rrcccc nnnnnnnn yyyyxxxx   lb     LOWER_8(x) = *(y+n)
+01110001 00rrcccc nnnnnnnn yyyyxxxx   lbi    LOWER_8(x) = *(y+n); y += 1
+01110010 00rrcccc nnnnnnnn yyyyxxxx   lbp    y -= 1; LOWER_8(x) = *(y+n)
+01110011 00rrcccc nnnnnnnn yyyyxxxx   lbd    LOWER_8(x) = *(y+n); y -= 1
+01110100 00rrcccc nnnnnnnn yyyyxxxx   lh     LOWER_16(x) = *(y+n)
+01110101 00rrcccc nnnnnnnn yyyyxxxx   lhi    LOWER_16(x) = *(y+n); y += 2
+01110110 00rrcccc nnnnnnnn yyyyxxxx   lhp    y -= 2; LOWER_16(x) = *(y+n)
+01110111 00rrcccc nnnnnnnn yyyyxxxx   lhd    LOWER_16(x) = *(y+n); y -= 2
+01111000 00rrcccc nnnnnnnn yyyyxxxx   lw     x = *(y+n)
+01111001 00rrcccc nnnnnnnn yyyyxxxx   lwi    x = *(y+n); y += 4
+                                      pop x,y  (alias lwi x,y,$0)
+01111010 00rrcccc nnnnnnnn yyyyxxxx   lwp    y -= 4; x = *(y+n)
+01111011 00rrcccc nnnnnnnn yyyyxxxx   lwd    x = *(y+n); y -= 4
+01111100 00rrcccc 0000zzzz yyyyxxxx   lbx    LOWER_8(x) = *(y+z)
+01111101 00rrcccc 0000zzzz yyyyxxxx   lhx    LOWER_16(x) = *(y+z)
+01111110 00rrcccc 0000zzzz yyyyxxxx   lwx    x = *(y+z)
+01111111 00rrcccc 0000zzzz yyyyxxxx   lwxi   x = *(y+z); z += 4
 
 TWO-OPERAND FORMAT (32) - instr x,y or instr x,$n
 00100000 00rrcccc 00000000 yyyyxxxx   mov    x = y
-00100001 00rrcccc 00000000 yyyyxxxx   swp    x = y; y = x  (in parallel)
-00100010 00rrcccc 00000000 yyyyxxxx   not    x = !y
-00100011 00rrcccc 00000000 yyyyxxxx   cmp    (x - y)  (updates sr)
-00100100 00rrcccc 00000000 yyyyxxxx   sxb    x = SIGN_EXTEND_8_TO_32(y)
-00100101 00rrcccc 00000000 yyyyxxxx   sxw    x = SIGN_EXTEND_16_TO_32(y)
-00100110 00rrcccc 00000000 yyyyxxxx   zxb    x = ZERO_EXTEND_8_TO_32(y)
-00100111 00rrcccc 00000000 yyyyxxxx   zxw    x = ZERO_EXTEND_16_TO_32(y)
-00101000 00rrcccc 00000000 yyyyxxxx   cpr0   cc0 =  FLAGS_OF( x - y )
-00101001 00rrcccc 00000000 yyyyxxxx   cpr1   cc1 =  FLAGS_OF( x - y )
-00101010 00rrcccc 00000000 yyyyxxxx   cpr2   cc2 =  FLAGS_OF( x - y )
-00101011 00rrcccc 00000000 yyyyxxxx   cpr3   cc3 =  FLAGS_OF( x - y )
-00101100 00rrcccc 00000000 yyyyxxxx   mvhh   HIGH16(x) = HIGH16(y)
-00101101 00rrcccc 00000000 yyyyxxxx   mvhl   LOW16(x)  = HIGH16(y)
-00101110 00rrcccc 00000000 yyyyxxxx   mvlh   HIGH16(x) = LOW16(y)
-00101111 00rrcccc 00000000 yyyyxxxx   mvll   LOW16(x)  = LOW16(y)
-00110000 00rrcccc nnnnnnnn nnnnxxxx   add    x = x + n
-00110001 00rrcccc nnnnnnnn nnnnxxxx   sub    x = x - n
-00110010 00rrcccc 00000000 yyyyxxxx   push   x -= 4; *(x) = y
-00110011 00rrcccc 00000000 yyyyxxxx   pop    x = *(y); y += 4
-00110100 00rrcccc 00000000 yyyyxxxx   mov    (reserved if x != 15 && x != 13)
-00110100 00rrcccc 00000000 yyyy1101  "mov ssp, y"   ssp = y
-00110100 00rrcccc 00000000 yyyy1111  "mov spc, y"   spc = y
-00110101 00rrcccc 00000000 yyyyxxxx   mov    (reserved if y != 15 && y != 13)
-00110101 00rrcccc 00000000 1101xxxx  "mov x, ssp"   x = ssp
-00110101 00rrcccc 00000000 1111xxxx  "mov x, spc"   x = spc
+00100001 00rrcccc 00000000 yyyyxxxx   swp    tmp = x; x = y; y = tmp
+00100010 00rrcccc 00000000 yyyyxxxx   not    x = !y                       [ZN]
+00100011 00rrcccc 00000000 yyyyxxxx   cmp    (x - y)  (updates flags)     [ZCVN]
+00100100 00rrcccc 00000000 yyyyxxxx   sxb    x = SIGN_EXTEND_8_TO_32(y)   [ZN]
+00100101 00rrcccc 00000000 yyyyxxxx   sxw    x = SIGN_EXTEND_16_TO_32(y)  [ZN]
+00100110 00rrcccc 00000000 yyyyxxxx   zxb    x = ZERO_EXTEND_8_TO_32(y)   [ZN]
+00100111 00rrcccc 00000000 yyyyxxxx   zxw    x = ZERO_EXTEND_16_TO_32(y)  [ZN]
+00101000 00rrcccc 00000000 yyyyxxxx   (reserved)
+00101001 00rrcccc 00000000 yyyyxxxx   (reserved)
+00101010 00rrcccc 00000000 yyyyxxxx   (reserved)
+00101011 00rrcccc 00000000 yyyyxxxx   (reserved)
+00101100 00rrcccc 00000000 yyyyxxxx   mvhh   HIGHER_16(x) = HIGHER_16(y)
+00101101 00rrcccc 00000000 yyyyxxxx   mvhl   LOWER_16(x)  = HIGHER_16(y)
+00101110 00rrcccc 00000000 yyyyxxxx   mvlh   HIGHER_16(x) = LOWER_16(y)
+00101111 00rrcccc 00000000 yyyyxxxx   mvll   LOWER_16(x)  = LOWER_16(y)
+00110000 00rrcccc nnnnnnnn nnnnxxxx   add    x = x + n                    [ZCVN]
+00110001 00rrcccc nnnnnnnn nnnnxxxx   sub    x = x - n                    [ZCVN]
+00110010 00rrcccc 00000000 yyyyxxxx   (reserved)
+00110011 00rrcccc 00000000 yyyyxxxx   (reserved)
+00110100 00rrcccc 00000000 yyyyxxxx   (reserved)
+00110101 00rrcccc 00000000 yyyyxxxx   (reserved)
 00110110 00rrcccc 00000000 yyyyxxxx   (reserved)
 00110111 00rrcccc 00000000 yyyyxxxx   (reserved)
-00111ooo 00rrcccc 00000000 yyyyxxxx   (reserved)
+ <System Block>
+00111000 00rrcccc 00000000 yyyyxxxx   smov   (move y to system x)
+                                      (reserved if x is not a system register)
+00111001 00rrcccc 00000000 yyyyxxxx   smov   (move system y to x)
+                                      (reserved if y is not a system register)
+00111010 00rrcccc 00000000 yyyyxxxx   (reserved)
+00111011 00rrcccc 00000000 yyyyxxxx   (reserved)
+00111100 00rrcccc 00000000 yyyyxxxx   (reserved)
+00111101 00rrcccc 00000000 yyyyxxxx   (reserved)
+00111110 00rrcccc 00000000 yyyyxxxx   (reserved)
+00111111 00rrcccc 00000000 yyyyxxxx   (reserved)
 
 ONE-OPERAND FORMAT (16) - instr x or instr $n
-00010000 00rrcccc nnnnnnnn nnnnnnnn   ba     pc = n << 2
-00010001 00rrcccc nnnnnnnn nnnnnnnn   br     pc += n << 2
-00010010 00rrcccc nnnnnnnn nnnnnnnn   (reserved)
-00010011 00rrcccc nnnnnnnn nnnnnnnn   (reserved)
+00010000 00rrcccc nnnnnnnn nnnnnnnn   ba     pc = n << 2   (signed n)
+00010001 00rrcccc nnnnnnnn nnnnnnnn   br     pc += n << 2  (signed n)
+00010010 00rrcccc nnnnnnnn nnnnnnnn   jf     pc = n | (LOWER_16(*(pc)) << 16)
+00010011 00rrcccc nnnnnnnn nnnnnnnn   last   pc -= 8   (execute previous)
+                                      jmp $u (alias jf $(u & 0xffff); last $(u >> 16))
 00010100 00rrcccc nnnnnnnn nnnnnnnn   call   isp -= 4; *(isp) = pc;
                                              isp -= 4; *(isp) = dsp; pc = n << 2
 00010101 00rrcccc nnnnnnnn nnnnnnnn   callr  isp -= 4; *(isp) = pc;
                                              isp -= 4; *(isp) = dsp; pc += n << 2
 00010110 00rrcccc nnnnnnnn nnnnnnnn   fcall  r8 = dsp; r9 = pc; pc = n << 2
 00010111 00rrcccc nnnnnnnn nnnnnnnn   fcallr r8 = dsp; r9 = pc; pc += n << 2
-
 00011000 00rrcccc nnnnnnnn nnnnnnnn   int    (software interrupt n)
-00011001 00rrcccc nnnnnnnn nnnnnnnn   (reserved)
+00011001 00rrcccc 00000000 0000xxxx   int    (software interrupt x)
 00011010 00rrcccc nnnnnnnn nnnnnnnn   lil    cc0 = n
 00011011 00rrcccc nnnnnnnn nnnnnnnn   lih    cc1 = n
-00011100 00rrcccc 00000000 0000xxxx   (reserved)
-00011101 00rrcccc 00000000 0000xxxx   (reserved)
-00011110 00rrcccc 00000000 0000xxxx   (reserved)
-00011111 00rrcccc 00000000 0000xxxx   (reserved)
+00011100 00rrcccc 00000000 0000xxxx   call   isp -= 4; *(isp) = pc;
+                                             isp -= 4; *(isp) = dsp; pc = x
+00011101 00rrcccc 00000000 0000xxxx   callr  isp -= 4; *(isp) = pc;
+                                             isp -= 4; *(isp) = dsp; pc += x
+00011110 00rrcccc 00000000 0000xxxx   fcall  r8 = dsp; r9 = pc; pc = x
+00011111 00rrcccc 00000000 0000xxxx   fcallr r8 = dsp; r9 = pc; pc += x
 
 ZERO-OPERAND FORMAT (8) - instr
-00000ooo 00000000 00000000 00000000   (reserved)
+00000000 00000000 00000000 00000000   (reserved)
+00000001 00000000 00000000 00000000   (reserved)
+00000010 00000000 00000000 00000000   (reserved)
+00000011 00000000 00000000 00000000   (reserved)
+00000100 00000000 00000000 00000000   (reserved)
+00000101 00000000 00000000 00000000   (reserved)
+00000110 00000000 00000000 00000000   (reserved)
+00000111 00000000 00000000 00000000   (reserved)
 00001000 00rrcccc 00000000 00000000   ret    dsp = *(isp); isp += 4;
                                              pc = *(isp); isp += 4
 00001001 00rrcccc 00000000 00000000   fret   dsp = r8; pc = r9
 00001010 00rrcccc 00000000 00000000   sleep  sr = sr | 0x1000 (halt until interrupt)
 00001011 00rrcccc 00000000 00000000   rfi    (return from interrupt)
-00001ooo 00rrcccc 00000000 00000000   (reserved)
+00001100 00rrcccc 00000000 00000000   (reserved)
+00001101 00rrcccc 00000000 00000000   (reserved)
+00001110 00rrcccc 00000000 00000000   (reserved)
 00001111 00rrcccc 00000000 00000000   brk    pc = pc
 
 
@@ -323,7 +382,7 @@ mode (also called user mode.)
 The current mode is indicated by the state of the P bit in sr.
 If P is clear, the CPU is running in system mode.
 If P is set, the CPU is running in protected mode.
-If this bit changed by software (set, since software can not clear it), or
+If this bit is changed by software (set, since software can not clear it), or
 a context switch is required by CPU hardware, the CPU performs these actions:
 - isp and ssp are exchanged
 - pc and spc are exchanged
@@ -334,36 +393,52 @@ a context switch is required by CPU hardware, the CPU performs these actions:
 INTERRUPTS AND TRAPS
 --------------------
 
-- The CPU indexes traps and interrupts using a 256 entry table starting
-  at address zero. Each entry is 32 bits, and contains the address of
-  a routine to execute for a given trap/interrupt.
-- The software interupt operation (int n), the instuction will use the lower
-  8 bits of n as the index into the interrupt table, and generate an
-  interrupt at that index. The upper 8 bits are ignored by hardware, and
-  may be used by software for further decoding/indexing. If the I bit in sr is
-  set, this will generate a special trap instead (see below.)
-- Hardware interrupts generate an 8 bit index for the interrupt table in a
-  platform specific way. Hardware interrupts are inhibited if the I bit in sr
-  is set, and will be processed when I is cleared.
+The CPU indexes all traps and interrupts using a 256 entry table starting
+at the 4 byte aligned address in the sii register, sii will be zero at reset.
+Each table entry is 32 bits, and contains the address of a routine to execute
+for a given trap/interrupt.
+* the lower 2 bits of sii will always read as 0, ensuring alignment.
+* the lower 2 bits of the indexed address will be ignored and loaded as 0.
 
-- When an interrupt is processed, the CPU will context switch to system mode
-  if needed, clear the F bit in sr, push pc then 32-bit sr onto isp, 
-  set the I flag in sr, and finally load pc with the address from the interrupt
-  table using the interrupt index.
-- A Trap is an exceptional condition raised by certain CPU operations.
-  When a trap is raised, the CPU will context switch to system mode if needed,
-  push pc then 32-bit sr onto isp, set the Trap flag (T) in sr, and then load
-  pc with with the address from the interrupt table using the trap index.
-- If the T bit in sr is set, and a trap is raised, the CPU will set the F bit
-  in sr, abort all current operations and halt. If the I bit is also set,
-  then a NMI or Reset is the only way resume the CPU from this state.
+The software interupt operation (int n, int x), the instuction will use
+the lower 8 bits of the given value as an index into the interrupt table,
+and generate an interrupt at that index. The upper bits are ignored
+by hardware, and may be used by software for further decoding/indexing.
+If the I bit in sr is set, a special trap will be generated instead (see below.)
 
-- the "rfi" or return from interrupt instruction, will pop 32 sr, followed by
-  pc, from isp. If this results in a change to the P flag in sr, the CPU will
+Hardware interrupts generate an 8-bit index for the interrupt table in a
+platform specific way. Hardware interrupts are inhibited if the I bit in sr
+is set, and will be processed when I is cleared.
+
+When an interrupt is processed:
+- the CPU will context switch to system mode if needed.
+- clear the F bit in sr
+- push pc then 32-bit sr onto isp
+- set the I flag in sr
+- load pc with the address from the interrupt table using the interrupt index.
+
+A Trap is an exceptional condition raised by certain CPU operations.
+When a trap is raised:
+- the CPU will context switch to system mode if needed.
+- push pc then 32-bit sr onto isp
+- set the Trap flag (T) in sr
+- load pc with with the address from the interrupt table using the trap index.
+
+When the T bit in sr is set, and a trap is raised:
+- the CPU will set the F bit in sr
+- abort all current operations.
+- and halt.
+- If the I bit is also set, then a NMI or Reset is the only way
+  to resume the CPU from this state.
+
+The "rfi" or return from interrupt instruction, will:
+- pop 32-bit sr, followed by pc, from isp.
+- If this results in a change to the P flag in sr, the CPU will
   then perform the context switch after pc is popped.
-- The CPU has a non-maskable interrupt connection, if asserted, the CPU will
-  process an interrupt with index 1, regardless of the operational state of
-  the CPU, including when either the F or I bits in sr are set.
+
+The CPU has a non-maskable interrupt connection, if asserted, the CPU will
+process an interrupt with index 1, regardless of the operational state of
+the CPU, including when either the F or I bits in sr are set.
 
 Indexes of special CPU Trap / Interrupt entries:
   0  Reset - Loaded at reset.
@@ -417,14 +492,14 @@ These instructions may only be executed while in system mode, execution from
 protected mode results in raising a Protection Trap:
 
 brk (raises a Break Trap instead)
-mov (only with x0110100 or x0110101 encodings)
+smov
 rfi
 sleep
 
-- The x0110100 and x0110101 encodings of "mov" have operands that are
-  considered reserved instructions, executing this instruction with
-  reserved operands raises a Protection Trap while in protected mode,
-  and an Invalid Opcode Trap while in system mode.
+- The smov instructions have operands that are considered reserved,
+  executing this instruction with reserved operands raises a
+  Protection Trap while in protected mode, and an Invalid Opcode Trap
+  while in system mode.
 
 - In protected mode, the condition bits are evaluated before executing
   the instruction, this means that if the condition evaluates false,
